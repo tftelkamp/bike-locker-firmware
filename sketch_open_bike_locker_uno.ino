@@ -27,39 +27,33 @@
 *  Autonomo D3 <=> SWITCH
 *  
 *  Autonomo D4 <=> SERVO
-*  *
-*  As the MFRC library makes hardcoded use of SPI the autonomo SPI port is remapped to sercom4 on autonomo  
-*  Defines in variant.h should be as follows
-*  #define PERIPH_SPI           sercom4 
-*  #define PIN_SPI_MISO         (53u)
-*  #define PIN_SPI_SS           (54u)
-*  #define PIN_SPI_MOSI         (55u)
-*  #define PIN_SPI_SCK          (56u)
+* 
 */
 
-#include <Sodaq_RN2483.h>
+#include <TheThingsNetwork.h>
 #include <SPI.h>
 #include <MFRC522.h>
+#include <Servo.h> 
 
-// defines for LoraBee/Autonomo
-#define debugSerial SerialUSB
+#define debugSerial Serial
 #define loraSerial Serial1
 
 // defines for MFRC lib
-#define Serial SerialUSB
-#define SS_PIN PIN_SPI_SS
-#define RST_PIN 0
+#define SS_PIN 7
+#define RST_PIN 8
+
 MFRC522 mfrc522(SS_PIN, RST_PIN);  
+TheThingsNetwork ttn;
+Servo myservo;
 
 // defines for status leds/switches
-#define LED_RED 1
-#define LED_GREEN 2
-#define SWITCH1_PIN 3
+#define LED_RED 2
+#define LED_GREEN 3
+#define SWITCH1_PIN 4
 
-// define for servo motor (A0)
-#define SERVO_PIN 4
-#define RELAY_PIN 12
-
+// define for servo motor
+#define SERVO_PIN 5
+#define RELAY_PIN 6
 
 /* defines for low level lock API (in uplink direction) 
 *  
@@ -86,37 +80,15 @@ MFRC522 mfrc522(SS_PIN, RST_PIN);
 #define CMD_REQUEST_LOCKER_UNBLOCK 4
 
 //Function for simulation of lock (servo based, can alco be a relay)
-void openLock()
+void openLock(int degrees)
 {
   unsigned long timeout=millis();
-    // poor man's PWM, SG90 servo needs about 50Hz pwm
-    pinMode(SERVO_PIN, OUTPUT);     
-    digitalWrite(VCC_SW, HIGH);     
  
   digitalWrite(RELAY_PIN, HIGH);
-    
-    for (uint16_t zz=0;zz<20;zz++)
-    {  
-        digitalWrite(SERVO_PIN,HIGH);
-        delay(1);
-        digitalWrite(SERVO_PIN,LOW);
-        delay(19);
-    }
-
-    for (uint16_t zz=0;zz<20;zz++)
-    {  
-        digitalWrite(SERVO_PIN,HIGH);
-        delay(2);
-        digitalWrite(SERVO_PIN,LOW);
-        delay(18);
-    }
-
-    digitalWrite(VCC_SW, LOW);     
-    pinMode(SERVO_PIN, INPUT);     
-
-  while((millis()-timeout)<5000)
-    delay(100);
- 
+  myservo.attach(SERVO_PIN,1000,2000); 
+  myservo.write(degrees); 
+  delay(1000);
+  myservo.detach();
   digitalWrite(RELAY_PIN, LOW);
 }
 
@@ -229,9 +201,9 @@ void uidShow(uint8_t *uid)
 }
 
 // Functions, variables for thingsnetwork (ABP assumed)
-const byte devAddr[4] = { }; 
-const byte nwkSKey[16] = { }; 
-const byte appSKey[16] = { }; 
+const byte devAddr[4] = { 0xBA, 0xC1, 0xF5, 0x77 }; 
+const byte nwkSKey[16] = { 0x3B, 0x91, 0xEB, 0xC5, 0x4C, 0xD6, 0x2F, 0xCC, 0xE0, 0x61, 0xC7, 0x89, 0xE0, 0x84, 0xBC, 0xEA }; 
+const byte appSKey[16] = { 0x24, 0xD7, 0xAF, 0x21, 0x23, 0xE3, 0x67, 0x05, 0xE9, 0xE6, 0x86, 0xC3, 0x46, 0x6B, 0x85, 0x1C }; 
 
 uint8_t sendPayload[32];
 uint8_t receivePayload[32];
@@ -280,61 +252,15 @@ uint8_t ttnSend(const uint8_t* payload, uint8_t size, uint8_t reqAck=0, uint8_t 
   rawRN2483Cmd((uint8_t*)"radio get crc\r\n");
   rawRN2483Cmd((uint8_t*)"radio get prlen\r\n");
 */
+  reqAck=0;
+  ttn.sendCommand("mac set dr 5");
   if (reqAck)
-    resp=LoRaBee.sendReqAck(1,payload,size,retries);
+    resp=ttn.sendBytes(payload,size, 1, 1);
+    
   else
-    resp=LoRaBee.send(1,payload,size);  
+    resp=ttn.sendBytes(payload,size, 1, 0);  
 
-  switch (resp)
-  {
-    case NotConnected:
-      debugSerial.println("No network connection. Halting!");
-      while(1) 
-        ledBlink(LED_BUILTIN,3,3);
-      break;
-    case PayloadSizeError:
-      debugSerial.println("Maximum payload size exceeded. Halting!");
-      while(1)
-        ledBlink(LED_BUILTIN,4,3);
-      break;
-    case InternalError:
-      debugSerial.println("Internal error. Halting!");
-      while (1) 
-        ledBlink(LED_BUILTIN,5,3);
-      break;
-    case NetworkFatalError:
-      debugSerial.println("Fatal network error. Halting!");
-      while (1) 
-        ledBlink(LED_BUILTIN,6,3);
-      break;
-    case NoAcknowledgment:
-      debugSerial.println("No acknowledge received!");
-      ledBlink(LED_RED,3,3);
-      break;
-    case Busy:
-      debugSerial.println("RN2483 busy, sleep 5 seconds.");
-      ledBlink(LED_RED,4,3);
-      delay(3000);
-      break;
-    case NoResponse:
-      debugSerial.println("No response from RN2483.");
-      ledBlink(LED_RED,5,3);
-      break;
-    case Timeout:
-      debugSerial.println("Connection timeout.");
-      ledBlink(LED_RED,6,3);
-      break;
-    case NoError:
-      debugSerial.println("Packet transmission OK.");
-      ret=1;
-      break;
-    default:
-      debugSerial.println("Unknow result after transmission. Halting!");
-      while (1) 
-        ledBlink(LED_BUILTIN,7,3);
-      break;
-  }
-  return ret;
+  return resp;
 }  
 
 void setup()
@@ -344,9 +270,8 @@ void setup()
   debugSerial.begin(57600);
 
   // initialise servo
-  pinMode(VCC_SW, OUTPUT);     
-  digitalWrite(VCC_SW, LOW);     
-
+  // todo
+  
   // initialise relay
   pinMode(RELAY_PIN, OUTPUT);
   
@@ -360,18 +285,18 @@ void setup()
   ledSet(LED_GREEN,1);
 
   // initialise switch
-  pinMode(SWITCH1_PIN, INPUT);     
+  pinMode(SWITCH1_PIN, INPUT_PULLUP);     
   
-  // initialise LoraBee
-  pinMode(BEE_VCC, OUTPUT);     
-  digitalWrite(BEE_VCC, HIGH);
-
-  loraSerial.begin(LoRaBee.getDefaultBaudRate());
-  LoRaBee.setDiag(debugSerial); 
-  if (LoRaBee.initABP(loraSerial, devAddr, appSKey, nwkSKey, false))
+  loraSerial.begin(57600);
+  ttn.init(loraSerial, debugSerial);
+  ttn.reset();
+  
+  if (ttn.personalize(devAddr, nwkSKey, appSKey))
   {
     debugSerial.println("Connected to network.");
     ledSet(LED_BUILTIN,1);
+    //ttn.sendCommand("mac set rx2 3 869525000");
+    ttn.showStatus();
   }
   else
   {  
@@ -391,21 +316,20 @@ void loop()
   {
     debugSerial.println("Switch pressed, invoking downlink");
     sendPayload[0]=CMD_INVOKE_DOWNLINK;
-    if (ttnSend(sendPayload,1,1))
+    clearReceivePayload();
+    receivedBytes = (ttnSend(sendPayload,1,1));
+    if (receivedBytes)
     {
       debugSerial.println("Acknowledge packet received!");
-      
-      clearReceivePayload();
-      receivedBytes=LoRaBee.receive(receivePayload,32);
       if(receivedBytes)
       {  
       	debugSerial.print("I received ");
       	debugSerial.print(receivedBytes);
       	debugSerial.print(" byte(s) : ");
       	for (uint8_t zz=0;zz<receivedBytes;zz++)
-          debugSerial.println(receivePayload[zz],HEX);
+          debugSerial.println(ttn.downlink[zz],HEX);
       	
-      	if ((receivePayload[0]==1)&&(receivePayload[1]==0xff))
+      	if ((ttn.downlink[0]==1)&&(ttn.downlink[1]==0xff))
       	{
       	  debugSerial.println("Open lock command received from downlink, locker is no longer in use!");
           ledSet(LED_RED,0);
@@ -413,7 +337,7 @@ void loop()
 
           lockerInUse=0;
           lockerInUseTime=0;
-          openLock();
+          openLock(0);
 
           sendPayload[0]=CMD_SET_LOCKER_STATE;
           sendPayload[1]=0; // vrij
@@ -452,7 +376,7 @@ void loop()
 
         lockerInUse=1;
           lockerInUseTime=millis();
-        openLock();
+        openLock(180);
 
         sendPayload[0]=CMD_SET_LOCKER_STATE;
         sendPayload[1]=1; // bezet
@@ -471,7 +395,7 @@ void loop()
   
             lockerInUse=0;
             lockerInUseTime=0;
-            openLock();
+            openLock(0);
   
             sendPayload[0]=CMD_SET_LOCKER_STATE;
             sendPayload[1]=0; // vrij
@@ -495,21 +419,20 @@ void loop()
             debugSerial.println("Locker is blocked, requesting open lock from server!");
             sendPayload[0]=CMD_REQUEST_LOCKER_UNBLOCK;
             uidCopy(sendPayload,1,(uint8_t *)mfrc522.uid.uidByte);
-            if (ttnSend(sendPayload,1+uidLength,1))
+            clearReceivePayload();
+              receivedBytes=ttnSend(sendPayload,1+uidLength,1);
+            if (receivedBytes)
             {
               debugSerial.println("Acknowledge packet received!");
-      
-              clearReceivePayload();
-              receivedBytes=LoRaBee.receive(receivePayload,32);
               if(receivedBytes)
               {  
                 debugSerial.print("I received ");
                 debugSerial.print(receivedBytes);
                 debugSerial.print(" byte(s) : ");
                 for (uint8_t zz=0;zz<receivedBytes;zz++)
-                  debugSerial.println(receivePayload[zz]);
+                  debugSerial.println(ttn.downlink[zz]);
                 
-                if ((receivePayload[0]==1)&&(receivePayload[1]==0xff))
+                if ((ttn.downlink[0]==1)&&(ttn.downlink[1]==0xff))
                 {
                    debugSerial.println("Unblock clearance received from downlink, locker is no longer in use!");
   
@@ -518,7 +441,7 @@ void loop()
 
           lockerInUse=0;
                     lockerInUseTime=0;
-          openLock();
+          openLock(0);
 
                     lockerInUse=0;
                     lockerInUseTime=0;
@@ -571,4 +494,5 @@ void loop()
     }
   }   
 }
+
 
